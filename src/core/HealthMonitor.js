@@ -27,8 +27,7 @@ class HealthMonitor {
     this.store = options.store instanceof StatusStore ? options.store : null;
     this.logger = options.logger || logger;
     this.isChecking = false;
-    this.task = null;
-    this.cronExpression = options.cronExpression || '*/5 * * * *';
+    this.serviceTasks = new Map();
     this.claudeConfigInitialized = false;
   }
 
@@ -240,85 +239,85 @@ class HealthMonitor {
 
   async start() {
     this.#assertReady();
-    if (this.task) {
-      return this.task;
+    if (this.serviceTasks.size > 0) {
+      return;
     }
 
     await this.initializeClaudeConfig();
 
-    this.task = cron.schedule(this.cronExpression, () => {
-      this.runChecks().catch((error) => {
-        this.logger.log('error', 'monitor', 'Failed to execute scheduled checks', error);
-      });
-    });
+    const services = await this.#loadEnabledServices();
 
-    this.runChecks().catch((error) => {
-      this.logger.log('error', 'monitor', 'Failed to execute initial checks', error);
-    });
+    for (const service of services) {
+      const serviceId = service.id || service.name;
+      if (!serviceId) continue;
+
+      const intervalMinutes = service.checkInterval || 5;
+      const cronExpression = `*/${intervalMinutes} * * * *`;
+
+      const task = cron.schedule(cronExpression, () => {
+        this.runCheckForService(service).catch((error) => {
+          this.logger.log('error', 'monitor', `Failed to check service ${serviceId}`, error);
+        });
+      });
+
+      this.serviceTasks.set(serviceId, task);
+      this.logger.log('info', 'monitor', `Scheduled service ${serviceId} with interval ${intervalMinutes} minutes`);
+
+      this.runCheckForService(service).catch((error) => {
+        this.logger.log('error', 'monitor', `Failed initial check for service ${serviceId}`, error);
+      });
+    }
 
     this.generatePublicStatus().catch((error) => {
       this.logger.log('warn', 'monitor', 'Failed to generate initial public status', error);
     });
-
-    return this.task;
   }
 
   stop() {
-    if (this.task) {
-      this.task.stop();
-      this.task = null;
+    for (const [serviceId, task] of this.serviceTasks.entries()) {
+      task.stop();
+      this.logger.log('info', 'monitor', `Stopped task for service ${serviceId}`);
     }
+    this.serviceTasks.clear();
+  }
+
+  async runCheckForService(service) {
+    this.#assertReady();
+    const serviceId = service.id || service.name;
+    if (!serviceId) return;
+
+    try {
+      const result = await this.checker.check(service);
+      await this.store.recordCheckResult(serviceId, result);
+    } catch (error) {
+      const fallback = {
+        name: service.name || serviceId,
+        stdout: '',
+        stderr: '',
+        checkedAt: new Date().toISOString(),
+        status: 'error',
+        message: error.message,
+        responseTime: 0,
+        expectedAnswer: service.expectedAnswer ?? null
+      };
+      this.logger.log('error', 'monitor', `Failed to check service ${serviceId}`, { error, result: fallback });
+      await this.store.recordCheckResult(serviceId, fallback);
+    }
+
+    await this.generatePublicStatus();
   }
 
   async runChecks() {
     this.#assertReady();
-    if (this.isChecking) {
-      this.logger.log('warn', 'monitor', 'Check cycle already running; skipping concurrent execution');
+    const services = await this.#loadEnabledServices();
+    if (services.length === 0) {
+      this.logger.log('warn', 'monitor', 'No enabled services found in configuration');
+      await this.generatePublicStatus();
       return;
     }
 
-    this.isChecking = true;
-
-    try {
-      const services = await this.#loadEnabledServices();
-      if (services.length === 0) {
-        this.logger.log('warn', 'monitor', 'No enabled services found in configuration');
-        await this.generatePublicStatus();
-        return;
-      }
-
-      for (const service of services) {
-        const serviceId = service.id || service.name;
-        if (!serviceId) {
-          continue;
-        }
-        try {
-          const result = await this.checker.check(service);
-          await this.store.recordCheckResult(serviceId, result);
-        } catch (error) {
-          const fallback = {
-            name: service.name || serviceId,
-            stdout: '',
-            stderr: '',
-            checkedAt: new Date().toISOString(),
-            status: 'error',
-            message: error.message,
-            responseTime: 0,
-            expectedAnswer: service.expectedAnswer ?? null
-          };
-          this.logger.log(
-            'error',
-            'monitor',
-            `Failed to check service ${serviceId}`,
-            { error, result: fallback }
-          );
-          await this.store.recordCheckResult(serviceId, fallback);
-        }
-      }
-
-      await this.generatePublicStatus();
-    } finally {
-      this.isChecking = false;
+    for (const service of services) {
+      await this.runCheckForService(service);
     }
   }
 

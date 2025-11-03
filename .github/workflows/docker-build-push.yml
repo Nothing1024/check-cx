@@ -1,0 +1,73 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        # 仅在不是 PR 的情况下才登录 (即 push 到 main 或 push tag 时)
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # --- 这是修复问题的关键 ---
+            # 捕获所有 tag push (例如 v-beta, v-my-feature, v1.2.3)
+            type=ref,event=tag
+
+            # --- 以下是你的原有规则 ---
+            # 捕获 branch push (例如 'main')
+            type=ref,event=branch
+            # 捕获 pull request (例如 'pr-123')
+            type=ref,event=pr
+            # 捕获 semver tags (例如 'v1.2.3' 会生成 'v1.2.3', 'v1.2', 'v1')
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # 如果是默认分支 (main)，则添加 'latest' 标签
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          # 仅在不是 PR 的情况下才真正 push 镜像
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 启用 GHA 缓存以加快构建速度
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

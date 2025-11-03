@@ -13,6 +13,7 @@
       },
       "timeout": 30000,
       "expectedAnswer": "22",
+      "checkInterval": 5,
       "enabled": true
     },
     {
@@ -28,6 +29,7 @@
       },
       "timeout": 30000,
       "expectedAnswer": "2",
+      "checkInterval": 3,
       "enabled": true
     },
     {
@@ -42,8 +44,8 @@
       },
       "timeout": 30000,
       "expectedAnswer": "2",
+      "checkInterval": 10,
       "enabled": true
     }
-  ],
-  "checkInterval": 300
+  ]
 }

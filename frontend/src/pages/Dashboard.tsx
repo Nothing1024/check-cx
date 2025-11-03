@@ -63,7 +63,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-8">
+    <div className="min-h-screen bg-gray-50 px-4 py-8 pb-96">
       <div className="mx-auto max-w-5xl space-y-8">
         <div className="space-y-3">
           <h1 className="text-4xl font-bold text-gray-900">AI CLI Provider健康状态检测</h1>
